@@ -7,10 +7,7 @@ sudo apt-get update
 sudo apt-get install mariadb-server
 sudo mysql_secure_installation
 sudo apt-get install mariadb-client-10.3
-echo ""
-echo " PLEASE ENTER COMMAND ':r my_addon.cf' IN VI!"
-read a
-sudo vi /etc/mysql/my.cnf
+sudo cp my_addon.cnf /etc/mysql/my.cnf
 sudo service mariadb restart
 sudo curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.33.11/install.sh | bash
 export NVM_DIR="$HOME/.nvm"
@@ -27,7 +24,7 @@ sudo apt-get install supervisor
 sudo apt-get install nginx
 sudo pip3 install frappe-bench
 bench --version
-bench init frappe-bench
+bench init frappe-bench --frappe-path=https://github.com/erpdcs-dev/frappe.git
 cd frappe-bench
 bench new-site develop
 sudo bench setup production frappe
