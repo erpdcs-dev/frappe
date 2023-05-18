@@ -26,11 +26,11 @@ sudo pip3 install frappe-bench
 bench --version
 bench init frappe-bench --frappe-path=https://github.com/erpdcs-dev/frappe.git
 cd frappe-bench
-bench new-site develop
+echo "Please enter the name of your site and press enter"
+read site
+bench new-site $site
 sudo bench setup production frappe
 sudo ln -s /home/frappe/frappe-bench/config/supervisor.conf /etc/supervisor/conf.d/frappe.conf
 sudo service supervisor restart
-
-
 
 
