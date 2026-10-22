@@ -461,6 +461,11 @@ def pdf_contains_js(file_content: bytes):
 	"""
 	Check if a PDF file contains JavaScript.
 
+	The object graph is walked from the document catalog and from every page. References
+	(`IndirectObject`) are resolved on the way, since most of a PDF, e.g. the catalog's `/Names`
+	tree or the actions of annotations, is stored behind them. Visited objects are remembered,
+	because the graph is cyclic (`/Parent` points back up the page tree).
+
 	Args:
 		file_content (bytes): The content of the PDF file.
 
@@ -470,27 +475,36 @@ def pdf_contains_js(file_content: bytes):
 	from io import BytesIO
 
 	from pypdf import PdfReader, errors
+	from pypdf.generic import IndirectObject
 
 	reader = PdfReader(BytesIO(file_content))
+	visited: set[tuple[int, int]] = set()
 
-	def has_javascript(obj):
-		if isinstance(obj, dict):
-			for key, value in obj.items():
-				if key in ("/JS", "/JavaScript"):
-					return True
-				if has_javascript(value):
-					return True
-		elif isinstance(obj, list):
-			for item in obj:
-				if has_javascript(item):
-					return True
+	def has_javascript(start):
+		# iterative on purpose: a crafted file can nest deeper than the recursion limit
+		pending = [start]
+		while pending:
+			obj = pending.pop()
+			if isinstance(obj, IndirectObject):
+				reference = (obj.idnum, obj.generation)
+				if reference in visited:
+					continue
+				visited.add(reference)
+				obj = obj.get_object()
+
+			if isinstance(obj, dict):
+				for key, value in obj.items():
+					if key in ("/JS", "/JavaScript"):
+						return True
+					pending.append(value)
+			elif isinstance(obj, list):
+				pending.extend(obj)
 		return False
 
-	root = reader.trailer.get("/Root", {})
-	if has_javascript(root):
-		return True
-
 	try:
+		if has_javascript(reader.trailer.get("/Root")):
+			return True
+
 		for page in reader.pages:
 			if has_javascript(page):
 				return True

@@ -258,3 +258,94 @@ class TestChromeCdpReliability(IntegrationTestCase):
 		page.session = FakeSession([(None, {"message": "boom"})] * 4)
 		with patch("frappe.utils.chromium.page.time.sleep"):
 			self.assertRaisesRegex(RuntimeError, "Error evaluating expression", page.evaluate, "1+1")
+
+
+class TestPdfContainsJs(IntegrationTestCase):
+	@staticmethod
+	def build(prepare=None, encrypt=None) -> bytes:
+		from pypdf import PdfWriter
+
+		writer = PdfWriter()
+		page = writer.add_blank_page(width=72, height=72)
+		if prepare:
+			prepare(writer, page)
+		if encrypt:
+			writer.encrypt(encrypt)
+		stream = io.BytesIO()
+		writer.write(stream)
+		return stream.getvalue()
+
+	@staticmethod
+	def javascript_action(code="app.alert(1)"):
+		from pypdf.generic import DictionaryObject, NameObject, TextStringObject
+
+		return DictionaryObject(
+			{NameObject("/S"): NameObject("/JavaScript"), NameObject("/JS"): TextStringObject(code)}
+		)
+
+	def test_clean_pdf_has_no_js(self):
+		self.assertFalse(pdfgen.pdf_contains_js(blank_pdf()))
+
+	def test_js_in_document_names_tree(self):
+		# document-level scripts live behind /Root -> /Names -> /JavaScript -> /Names
+		from pypdf.generic import ArrayObject, DictionaryObject, NameObject, TextStringObject
+
+		def prepare(writer, page):
+			scripts = writer._add_object(
+				DictionaryObject(
+					{
+						NameObject("/Names"): ArrayObject(
+							[TextStringObject("init"), writer._add_object(self.javascript_action())]
+						)
+					}
+				)
+			)
+			names = writer._add_object(DictionaryObject({NameObject("/JavaScript"): scripts}))
+			writer._root_object[NameObject("/Names")] = names
+
+		self.assertTrue(pdfgen.pdf_contains_js(self.build(prepare)))
+
+	def test_js_in_open_action(self):
+		from pypdf.generic import NameObject
+
+		pdf = self.build(
+			lambda writer, page: writer._root_object.update(
+				{NameObject("/OpenAction"): self.javascript_action()}
+			)
+		)
+		self.assertTrue(pdfgen.pdf_contains_js(pdf))
+
+	def test_js_in_page_additional_actions(self):
+		from pypdf.generic import DictionaryObject, NameObject
+
+		def prepare(writer, page):
+			action = writer._add_object(self.javascript_action())
+			page[NameObject("/AA")] = DictionaryObject({NameObject("/O"): action})
+
+		self.assertTrue(pdfgen.pdf_contains_js(self.build(prepare)))
+
+	def test_js_in_link_annotation(self):
+		from pypdf.generic import ArrayObject, DictionaryObject, NameObject
+
+		def prepare(writer, page):
+			annotation = writer._add_object(
+				DictionaryObject(
+					{
+						NameObject("/Type"): NameObject("/Annot"),
+						NameObject("/Subtype"): NameObject("/Link"),
+						NameObject("/A"): writer._add_object(self.javascript_action()),
+					}
+				)
+			)
+			page[NameObject("/Annots")] = ArrayObject([annotation])
+
+		self.assertTrue(pdfgen.pdf_contains_js(self.build(prepare)))
+
+	def test_reference_cycles_do_not_loop(self):
+		# every page points back to its parent and the parent lists the page again
+		pdf = self.build(lambda writer, page: writer.add_blank_page(width=72, height=72))
+		self.assertFalse(pdfgen.pdf_contains_js(pdf))
+
+	def test_encrypted_pdf_is_not_inspected(self):
+		pdf = self.build(encrypt="secret")
+		self.assertFalse(pdfgen.pdf_contains_js(pdf))
